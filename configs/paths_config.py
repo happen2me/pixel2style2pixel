@@ -6,6 +6,10 @@ dataset_paths = {
 	'celeba_train_segmentation': '',
 	'celeba_test_segmentation': '',
 	'ffhq': '',
+	'ioct_train_segmentation': '',
+	'ioct_train': '',
+	'ioct_test_segmentation': '',
+	'ioct_test': ''
 }
 
 model_paths = {

@@ -38,4 +38,11 @@ DATASETS = {
 		'test_source_root': dataset_paths['celeba_test'],
 		'test_target_root': dataset_paths['celeba_test'],
 	},
+	'ioct_seg_to_bscan': {
+		'transforms': transforms_config.SegToImageTransforms,
+		'train_source_root': dataset_paths['ioct_train_segmentation'],
+		'train_target_root': dataset_paths['ioct_train'],
+		'test_source_root': dataset_paths['ioct_test_segmentation'],
+		'test_target_root': dataset_paths['ioct_test'],
+	}
 }
