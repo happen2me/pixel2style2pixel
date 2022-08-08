@@ -28,10 +28,11 @@ class pSp(nn.Module):
 		self.opts.n_styles = int(math.log(self.opts.output_size, 2)) * 2 - 2
 		# Define architecture
 		self.encoder = self.set_encoder()
-		self.decoder = Generator(self.opts.output_size, 512, 8)
+		self.decoder = Generator(self.opts.output_size, 512, 8, output_nc=self.opts.output_nc)
 		self.face_pool = torch.nn.AdaptiveAvgPool2d((256, 256))
 		# Load weights if needed
-		self.load_weights()
+		self.latent_avg = None
+		# self.load_weights()
 
 	def set_encoder(self):
 		if self.opts.encoder_type == 'GradualStyleEncoder':
@@ -48,8 +49,8 @@ class pSp(nn.Module):
 		if self.opts.checkpoint_path is not None:
 			print('Loading pSp from checkpoint: {}'.format(self.opts.checkpoint_path))
 			ckpt = torch.load(self.opts.checkpoint_path, map_location='cpu')
-			self.encoder.load_state_dict(get_keys(ckpt, 'encoder'), strict=True)
-			self.decoder.load_state_dict(get_keys(ckpt, 'decoder'), strict=True)
+			self.encoder.load_state_dict(get_keys(ckpt, 'encoder'), strict=False)
+			self.decoder.load_state_dict(get_keys(ckpt, 'decoder'), strict=False)
 			self.__load_latent_avg(ckpt)
 		else:
 			print('Loading encoders weights from irse50!')
