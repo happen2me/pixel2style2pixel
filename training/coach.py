@@ -33,7 +33,10 @@ class Coach:
 			self.wb_logger = WBLogger(self.opts)
 
 		# Initialize network
-		self.net = pSp(self.opts).to(self.device)
+		self.net = pSp(self.opts)
+		if self.opts.load_partial_weights:
+			self.net.load_partial_weights()
+		self.net = self.net.to(self.device)
 
 		# Estimate latent_avg via dense sampling if latent_avg is not available
 		if self.net.latent_avg is None:
@@ -257,8 +260,8 @@ class Coach:
 		for i in range(display_count):
 			cur_im_data = {
 				'input_face': common.log_input_image(x[i], self.opts),
-				'target_face': common.tensor2im(y[i]),
-				'output_face': common.tensor2im(y_hat[i]),
+				'target_face': common.tensor2im(y[i], grayscale=True),
+				'output_face': common.tensor2im(y_hat[i], grayscale=True),
 			}
 			if id_logs is not None:
 				for key in id_logs[i]:

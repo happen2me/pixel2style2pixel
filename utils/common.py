@@ -14,13 +14,17 @@ def log_input_image(x, opts):
 		return tensor2map(x)
 
 
-def tensor2im(var):
+def tensor2im(var, grayscale=False):
 	var = var.cpu().detach().transpose(0, 2).transpose(0, 1).numpy()
 	var = ((var + 1) / 2)
 	var[var < 0] = 0
 	var[var > 1] = 1
 	var = var * 255
-	return Image.fromarray(var.astype('uint8'))
+	if grayscale:
+		im = Image.fromarray(var.astype('uint8').squeeze(axis=2), 'L')
+	else:
+		im = Image.fromarray(var.astype('uint8'))
+	return im
 
 
 def tensor2map(var):

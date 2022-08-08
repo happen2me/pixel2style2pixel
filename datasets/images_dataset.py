@@ -21,7 +21,10 @@ class ImagesDataset(Dataset):
 		from_im = from_im.convert('RGB') if self.opts.label_nc == 0 else from_im.convert('L')
 
 		to_path = self.target_paths[index]
-		to_im = Image.open(to_path).convert('RGB')
+		if self.opts.output_nc == 1:
+			to_im = Image.open(to_path).convert('L')
+		else:
+			to_im = Image.open(to_path).convert('RGB')
 		if self.target_transform:
 			to_im = self.target_transform(to_im)
 

@@ -67,6 +67,25 @@ class pSp(nn.Module):
 			else:
 				self.__load_latent_avg(ckpt, repeat=self.opts.n_styles)
 
+	@staticmethod
+	def load_partial_weights_helper(model, state_dict):
+		model_dict = model.state_dict()
+		filtered_dict = {k: v for k, v in state_dict.items() if k in model_dict and model_dict[k].shape == v.shape}
+		model_dict.update(filtered_dict)
+		model.load_state_dict(model_dict)
+		print(f"{len(filtered_dict)} from {len(state_dict)} weights loaded")
+
+	def load_partial_weights(self):
+		'''
+		Load weights that match in name and size from opts.stylegan_weights
+		'''
+		print(f"Loading weights from {self.opts.stylegan_weights}!")
+		ckpt = torch.load(self.opts.stylegan_weights)
+		state_dict = ckpt['state_dict']
+		self.load_partial_weights_helper(self, state_dict)
+		self.__load_latent_avg(ckpt)
+
+
 	def forward(self, x, resize=True, latent_mask=None, input_code=False, randomize_noise=True,
 	            inject_latent=None, return_latents=False, alpha=None):
 		if input_code:
