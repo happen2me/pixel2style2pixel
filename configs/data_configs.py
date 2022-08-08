@@ -44,5 +44,12 @@ DATASETS = {
 		'train_target_root': dataset_paths['ioct_train'],
 		'test_source_root': dataset_paths['ioct_test_segmentation'],
 		'test_target_root': dataset_paths['ioct_test'],
+	},
+	'ioct_overfit': {
+		'transforms': transforms_config.SegToImageTransforms,
+		'train_source_root': dataset_paths['ioct_overfit_segmentation'],
+		'train_target_root': dataset_paths['ioct_overfit'],
+		'test_source_root': dataset_paths['ioct_overfit_segmentation'],
+		'test_target_root': dataset_paths['ioct_overfit'],
 	}
 }

@@ -96,13 +96,14 @@ class SegToImageTransforms(TransformsConfig):
 
 	def __init__(self, opts):
 		super(SegToImageTransforms, self).__init__(opts)
+		self.opts = opts
 
 	def get_transforms(self):
 		transforms_dict = {
 			'transform_gt_train': transforms.Compose([
 				transforms.Resize((256, 256)),
 				transforms.ToTensor(),
-				transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]),
+				transforms.Normalize([0.5] * self.opts.output_nc, [0.5] * self.opts.output_nc)]),
 			'transform_source': transforms.Compose([
 				transforms.Resize((256, 256)),
 				augmentations.ToOneHot(self.opts.label_nc),
@@ -110,7 +111,7 @@ class SegToImageTransforms(TransformsConfig):
 			'transform_test': transforms.Compose([
 				transforms.Resize((256, 256)),
 				transforms.ToTensor(),
-				transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]),
+				transforms.Normalize([0.5] * self.opts.output_nc, [0.5] * self.opts.output_nc)]),
 			'transform_inference': transforms.Compose([
 				transforms.Resize((256, 256)),
 				augmentations.ToOneHot(self.opts.label_nc),
