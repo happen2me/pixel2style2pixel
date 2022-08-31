@@ -87,7 +87,7 @@ class pSp(nn.Module):
 
 
 	def forward(self, x, resize=True, latent_mask=None, input_code=False, randomize_noise=True,
-	            inject_latent=None, return_latents=False, alpha=None):
+	            inject_latent=None, return_latents=False, alpha=None, return_codes=False):
 		if input_code:
 			codes = x
 		else:
@@ -110,15 +110,20 @@ class pSp(nn.Module):
 				else:
 					codes[:, i] = 0
 
-		input_is_latent = not input_code
+		# input_is_latent = not input_code
+		input_is_latent = True
+		# if input_code == True:
+		# 	print("Warning! input_code is True, but input_is_latent is set to True")
 		images, result_latent = self.decoder([codes],
 		                                     input_is_latent=input_is_latent,
 		                                     randomize_noise=randomize_noise,
 		                                     return_latents=return_latents)
-
+		# print("result latent remains the same? ", torch.all(result_latent==codes))
 		if resize:
 			images = self.face_pool(images)
 
+		if return_codes and return_latents:
+			return images, result_latent, codes
 		if return_latents:
 			return images, result_latent
 		else:
