@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 sys.path.append(".")
 sys.path.append("..")
 
-from datasets import augmentations
+from dataset import augmentations
 from utils.common import tensor2im, log_input_image
 from models.psp import pSp
 import dlib

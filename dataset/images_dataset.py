@@ -18,7 +18,10 @@ class ImagesDataset(Dataset):
 	def __getitem__(self, index):
 		from_path = self.source_paths[index]
 		from_im = Image.open(from_path)
-		from_im = from_im.convert('RGB') if self.opts.label_nc == 0 else from_im.convert('L')
+		if self.opts.output_nc == 1:
+			from_im = from_im.convert('L')
+		else:
+			from_im = from_im.convert('RGB') if self.opts.label_nc == 0 else from_im.convert('L')
 
 		to_path = self.target_paths[index]
 		if self.opts.output_nc == 1:

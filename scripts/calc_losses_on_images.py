@@ -12,7 +12,7 @@ sys.path.append(".")
 sys.path.append("..")
 
 from criteria.lpips.lpips import LPIPS
-from datasets.gt_res_dataset import GTResDataset
+from dataset.gt_res_dataset import GTResDataset
 
 
 def parse_args():

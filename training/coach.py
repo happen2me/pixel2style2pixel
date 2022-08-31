@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from utils import common, train_utils
 from criteria import id_loss, w_norm, moco_loss
 from configs import data_configs
-from datasets.images_dataset import ImagesDataset
+from dataset.images_dataset import ImagesDataset
 from criteria.lpips.lpips import LPIPS
 from models.psp import pSp
 from training.ranger import Ranger
