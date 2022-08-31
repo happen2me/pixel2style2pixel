@@ -72,7 +72,8 @@ def train_imgs_batch(segs, style_model, regressor, latent_model, device, correla
     attributes_mask_1 = attributes[:, 0].unsqueeze(1).repeat(1, 5)
     attributes_mask_2 = attributes[:, 5].unsqueeze(1).repeat(1, 5)
     attributes_mask = torch.cat([attributes_mask_1, attributes_mask_2], dim=-1)
-    modified_attributes = torch.Tensor([item[0] for item in modified]).to(device)
+    modified_attributes = np.array([item[0] for item in modified])
+    modified_attributes = torch.Tensor(modified_attributes).to(device)
     delta_attributes = modified_attributes - attributes
 
     w_n =  latent_model(w_latents, delta_attributes)
