@@ -60,12 +60,13 @@ class Latent2Latent(nn.Module):
 
 
 class LightningLatent2Latent(pl.LightningModule):
-    def __init__(self, style_model, regressor, correlation_matrix):
+    def __init__(self, style_model, regressor, correlation_matrix, change_channel=1):
         super().__init__()
         self.latent2latent = Latent2Latent()
         self.style_model = style_model
         self.regressor = regressor
         self.correlation_matrix = correlation_matrix
+        self.change_channel = change_channel
         
         # Freeze stylegan and regressor
         for p in self.style_model.parameters():
@@ -82,7 +83,8 @@ class LightningLatent2Latent(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         segs, bscans = batch
         segs = segs.to(self.device).float()
-        return train_imgs_batch(segs, self.style_model, self.regressor, self, self.device, self.correlation_matrix)
+        return train_imgs_batch(segs, self.style_model, self.regressor, 
+            self, self.device, self.correlation_matrix, self.change_channel)
     
     def configure_optimizers(self):
         return torch.optim.AdamW(self.latent2latent.parameters(), lr=0.01)

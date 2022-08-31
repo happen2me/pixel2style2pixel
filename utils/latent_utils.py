@@ -4,14 +4,14 @@ import torch
 import torch.nn.functional as F
 from utils.regressor_utils import attribute_label_from_segmentation
 
-def modify_attribute(attribute, correlation_matrix, change_nr=1, change=None):
+def modify_attribute(attribute, correlation_matrix, change_channel, change=None):
     """
     Modify the attribute by 1 dimension.
 
     Args:
         attribute: (batch_size, 10)
         correlation_matrix: (10, 10) correlation matrix of all attributes
-        change_nr: number of dimensions to change
+        change_channel: number of dimensions to change
         change: a scala in range (-0.5, 0.5). If None, a random scala will be generated.
     Returns:
         modified attribute: (batch_size, 10)
@@ -20,10 +20,10 @@ def modify_attribute(attribute, correlation_matrix, change_nr=1, change=None):
     if change is None:
         change = random.random() - 0.5
     attribute = np.array(attribute)
-    curr_val = attribute[change_nr]
+    curr_val = attribute[change_channel]
     changed_val = np.clip(curr_val + change, 0, 1)
     actual_change = changed_val - curr_val
-    changed_attribute = np.clip(attribute + actual_change * correlation_matrix[change_nr], 0, 1)
+    changed_attribute = np.clip(attribute + actual_change * correlation_matrix[change_channel], 0, 1)
     return changed_attribute, actual_change
 
 def get_latent(style_model, seg, device):
@@ -48,7 +48,7 @@ def get_latent(style_model, seg, device):
     return pred.detach().cpu(), latent.detach().cpu(), codes.detach().cpu()
 
 
-def train_imgs_batch(segs, style_model, regressor, latent_model, device, correlation_matrix):
+def train_imgs_batch(segs, style_model, regressor, latent_model, device, correlation_matrix, change_channel=1):
     """
     Train the latent to latent model on a batch of images.
 
@@ -66,7 +66,7 @@ def train_imgs_batch(segs, style_model, regressor, latent_model, device, correla
         _, _, w_latents = get_latent(style_model, segs, device)
     w_latents = w_latents.to(device)
     attributes = [attribute_label_from_segmentation(seg, normalize=True) for seg in segs]
-    modified = [modify_attribute(attribute, correlation_matrix, change_nr=1) for attribute in attributes]
+    modified = [modify_attribute(attribute, correlation_matrix, change_channel=change_channel) for attribute in attributes]
     modified_scale = [item[1] for item in modified]
     attributes = torch.Tensor(attributes).to(device)
     attributes_mask_1 = attributes[:, 0].unsqueeze(1).repeat(1, 5)
@@ -112,9 +112,10 @@ class InferenceGenerator:
         self.device = device
         self.correlation_matrix = correlation_matrix
         
-    def generate_new(self, w_latents, attribute, change, change_nr):
+    def generate_new(self, w_latents, attribute, change, change_channel):
         modified_attribute, actual_change = modify_attribute(attribute, self.correlation_matrix, 
-                                                             change_nr=change_nr, change=change)
+                                                             change_channel=change_channel,
+                                                             change=change)
         modified_attribute = torch.Tensor(modified_attribute).unsqueeze(0)
         attribute = torch.Tensor(attribute).unsqueeze(0)
         delta_attributes = modified_attribute - attribute
@@ -127,14 +128,14 @@ class InferenceGenerator:
         generated_image = generated_images[0][0]
         return generated_image, actual_change
 
-    def generate_new_imgs(self, seg, changes, change_nr=1):
+    def generate_new_imgs(self, seg, changes, change_channel=1):
         segs = seg.unsqueeze(0).float().cuda()
         with torch.no_grad():
             _, w_latents, w_codes = get_latent(self.style_model, segs, self.device)
         attribute = attribute_label_from_segmentation(seg, normalize=True)
         results = []
         for change in changes:
-            img, actual_change = self.generate_new(w_latents, attribute, change, change_nr)
+            img, actual_change = self.generate_new(w_latents, attribute, change, change_channel)
             results.append((img, actual_change))
         return results
 
