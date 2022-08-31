@@ -98,5 +98,50 @@ def train_imgs_batch(segs, style_model, regressor, latent_model, device, correla
     attribute_scores = regressor(generated_images)
     loss_attributes = F.mse_loss(attribute_scores * attributes_mask, modified_attributes * attributes_mask)
     
-    loss_all =  loss_cycle*0.5 + loss_attributes + loss_identity*0.5 + loss_neighborhood*0.5
+    loss_all =  loss_cycle*0.5 + loss_attributes + loss_identity*0.5 + loss_neighborhood*0.1
     return loss_all
+
+
+class InferenceGenerator:
+    """
+    A inference time helper class that generates images based on modified attributes.
+    """
+    def __init__(self, style_model, latent_model, correlation_matrix, device):
+        self.style_model = style_model
+        self.latent_model = latent_model
+        self.device = device
+        self.correlation_matrix = correlation_matrix
+        
+    def generate_new(self, w_latents, attribute, change, change_nr):
+        modified_attribute, actual_change = modify_attribute(attribute, self.correlation_matrix, 
+                                                             change_nr=change_nr, change=change)
+        modified_attribute = torch.Tensor(modified_attribute).unsqueeze(0)
+        attribute = torch.Tensor(attribute).unsqueeze(0)
+        delta_attributes = modified_attribute - attribute
+        delta_attributes = delta_attributes.to(self.device)
+        w_latents = w_latents.to(self.device)
+        with torch.no_grad():
+            w_n =  self.latent_model(w_latents, delta_attributes)
+            w_n = 0.7*w_latents + 0.3*w_n
+            generated_images = self.style_model(w_n, input_code=True).detach().cpu().numpy()
+        generated_image = generated_images[0][0]
+        return generated_image, actual_change
+
+    def generate_new_imgs(self, seg, changes, change_nr=1):
+        segs = seg.unsqueeze(0).float().cuda()
+        with torch.no_grad():
+            _, w_latents, w_codes = get_latent(self.style_model, segs, self.device)
+        attribute = attribute_label_from_segmentation(seg, normalize=True)
+        results = []
+        for change in changes:
+            img, actual_change = self.generate_new(w_latents, attribute, change, change_nr)
+            results.append((img, actual_change))
+        return results
+
+    def generate_original(self, seg):
+        segs = seg.unsqueeze(0).float().cuda()
+        with torch.no_grad():
+            _, w_latents, w_codes = get_latent(self.style_model, segs, self.device)
+        w_latents = w_latents.to(self.device)
+        reconstructed = self.style_model(w_latents, input_code=True).detach().cpu().numpy()
+        return reconstructed[0][0]
