@@ -3,8 +3,10 @@ from glob import glob
 from collections import defaultdict
 from PIL import Image
 import numpy as np
+import torch
+import torch.nn.functional as F
 import torchvision.transforms as transforms
-from utils.latent_utils import attribute_label_from_segmentation
+from utils.latent_utils import attribute_label_from_segmentation, get_latent
 from configs.transforms_config import ToOneHot, Conver2Uint8, MyResize
 from dataset.paired_dataset import PairedDataset
 
@@ -40,7 +42,7 @@ def create_pairs(group, print_stats=False, sample_rate=0.1, positive_rate=0.8):
     """
     Create training samples within a group. It will n pairs, where
     n = generate sample_rate * n_instrument_images * n_images
-    
+
     Args:
         group: a list of image paths
     Returns:
@@ -120,6 +122,51 @@ def prepare_paired_dataset():
                                   bscan_transform=bscan_transform, pair_indices=all_pairs)
     print(f"len train dataset: {len(train_dataset)}")
 
+
+def train_pairs_batch(batch, style_model, latent_model, device):
+    src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
+    with torch.no_grad():
+        _, _, w_latents_src = get_latent(style_model, src_seg, device)
+        _, _, w_latents_dst = get_latent(style_model, dst_seg, device)
+    w_latents_src, w_latents_dst = w_latents_src.to(device), w_latents_dst.to(device)
+    # if instrument & shadow don't appear in both image, then make the
+    # target as itself. In this case, the attr_diff has appearance channel
+    # as 0, other channels can be non-zero, but the image & latents should
+    # remain the same
+    delta_attributes = dst_attr - src_attr
+
+    w_n_forward = latent_model(w_latents_src, delta_attributes)
+    w_n_backward = latent_model(w_latents_dst, -delta_attributes)
+
+    # Target losss: converted latent resemble target latent
+    loss_dst = F.l1_loss(w_n_forward, w_latents_dst) + \
+               F.l1_loss(w_n_backward, w_latents_src)
+
+    # Cycle loss: when convert the latent backword with the negative
+    # delta attributes, the latent should be the same as the original
+    w_n_c_forward = latent_model(w_n_forward, -delta_attributes)
+    w_n_c_backward = latent_model(w_n_backward, delta_attributes)
+    loss_cycle = F.l1_loss(w_n_c_forward, w_latents_src) + \
+                 F.l1_loss(w_n_c_backward, w_latents_dst)
+
+    # Identity loss: can be omitted, while the self-transform is included in
+    # the training set
+    w_i = latent_model(w_latents_src, 0 * delta_attributes)
+    loss_identity = (w_latents_src, w_i)
+
+    # Neighborhood loss is omitted, similar constraint is enforced with target losss
+    # loss_neighborhood = F.mse_loss(w_n_forward, w_latents_src)
+
+    # Reconstruction loss: use the generted dst latent to reconstruct the dst bscan,
+    # the bscan should resemble the target bscan
+    generated_images_dst = style_model(w_n_forward, input_code=True)
+    generated_images_src = style_model(w_n_backward, input_code=True)
+
+    loss_reconstruct = F.mse_loss(generated_images_dst, dst_bscan) + \
+                       F.mse_loss(generated_images_src, src_bscan)
+
+    loss = loss_dst + loss_cycle + loss_identity + loss_reconstruct
+    return loss
 
 if __name__ == '__main__':
     prepare_paired_dataset()
