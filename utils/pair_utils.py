@@ -1,6 +1,9 @@
 import os
+from os.path import exists
+from pathlib import Path
 from glob import glob
 from collections import defaultdict
+import pickle
 from PIL import Image
 import numpy as np
 import torch
@@ -90,41 +93,92 @@ generated {pairs.shape[0]} pairs")
     return attributes, pairs
 
 
-def prepare_paired_dataset():
+def prepare_paired_dataset(attributes_cache_dir='artifacts/cache/paired'):
     """
     A helper function that creates training dataset for paired latent transform task
+
+    Args:
+        attributes_cache_dir: the directory to cache attributes and pairs
     """
-    seg_folder = '/home/extra/micheal/pixel2style2pixel/data/ioct/labels/train/'
-    bscan_folder = '/home/extra/micheal/pixel2style2pixel/data/ioct/bscans/train/'
+    seg_folder = 'data/ioct/labels/train/'
+    bscan_folder = 'data/ioct/bscans/train/'
     groups = group_images(seg_folder)
 
+    # Load all seg paths for comparison with the saved ones
     seg_paths = []
-    all_attributes = []
-    all_pairs = []
     for k in sorted(list(groups.keys())):
-        group = groups[k]
-        attributes, pairs = create_pairs(group, print_stats=True)
-        seg_paths += group
-        # Set an offset to the image index
-        pairs += len(seg_paths)
-        all_attributes.append(attributes)
-        all_pairs.append(pairs)
-    all_attributes = np.concatenate(all_attributes, axis=0)
-    all_pairs = np.concatenate(all_pairs, axis=0)
+        seg_paths += groups[k]
 
+    load_saved = False
+
+    # Define save paths
+    if attributes_cache_dir is not None:
+        Path(attributes_cache_dir).mkdir(parents=True, exist_ok=True)
+        all_pairs_path = os.path.join(attributes_cache_dir, 'all_pairs.npy')
+        all_attributes_path = os.path.join(attributes_cache_dir, 'all_attributes.npy')
+        seg_paths_path = os.path.join(attributes_cache_dir, 'seg_paths.pkl')
+        # Check whether the saved ones are qualified
+        if exists(all_pairs_path) and exists(all_attributes_path) and exists(seg_paths_path):
+            saved_seg_paths = pickle.load(open(seg_paths_path, 'rb'))
+            if saved_seg_paths == seg_paths:
+                load_saved = True
+                print("Loading attributes from cache...")
+                with open(all_pairs_path, 'rb') as f:
+                    all_pairs = np.load(f)
+                with open(all_attributes_path, 'rb') as f:
+                    all_attributes = np.load(f)
+
+    # Attain all attributes if there isn't a saved copy
+    if not load_saved:
+        all_attributes = []
+        all_pairs = []
+        seg_paths = [] # we need this again to count accumulated segmentations
+        for k in sorted(list(groups.keys())):
+            group = groups[k]
+            attributes, pairs = create_pairs(group, print_stats=True)
+            # Set an offset to the image index
+            seg_paths += group
+            pairs += len(seg_paths)
+            all_attributes.append(attributes)
+            all_pairs.append(pairs)
+        all_attributes = np.concatenate(all_attributes, axis=0)
+        all_pairs = np.concatenate(all_pairs, axis=0)
+        # Save computation results
+        if attributes_cache_dir is not None:
+            with open(seg_paths_path, 'wb') as f:
+                pickle.dump(seg_paths, f)
+            with open(all_attributes_path, 'wb') as f:
+                np.save(f, all_attributes)
+            with open(all_pairs_path, 'wb') as f:
+                np.save(f, all_pairs)
+            print(f"Saved attributes etc. cache to {attributes_cache_dir}")
+
+    # Patch: attributes should be of float 32, or there will be type mismatch
+    # in model forward
+    all_attributes = all_attributes.astype(np.float32)
+    # This is to conform to the assumption that:
+    # 1. The path groups covers all samples in the segmentation folder
+    # 2. The sorted prefix+suffix conforms with the sorted files in the folder
     seg_paths_from_groups = sorted(list(glob(seg_folder + '*')))
     if seg_paths_from_groups != seg_paths:
         print(f"len seg_path {len(seg_paths)} len grouped seg path: {len(seg_paths_from_groups)}")
         raise ValueError("Mismatch")
+    # Create a dataset from the attributes and pairs
     bscan_paths = sorted(glob(bscan_folder + '*'))
     train_dataset = PairedDataset(seg_paths=seg_paths, bscan_paths=bscan_paths, 
                                   attributes=all_attributes, seg_transform=seg_transform,
                                   bscan_transform=bscan_transform, pair_indices=all_pairs)
     print(f"len train dataset: {len(train_dataset)}")
+    return train_dataset
 
 
 def train_pairs_batch(batch, style_model, latent_model, device):
+    """
+    Train the latent to latent models with paired data.
+    """
     src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
+    src_seg, src_bscan, src_attr = src_seg.to(device), src_bscan.to(device), src_attr.to(device)
+    dst_seg, dst_bscan, dst_attr = dst_seg.to(device), dst_bscan.to(device), dst_attr.to(device)
     with torch.no_grad():
         _, _, w_latents_src = get_latent(style_model, src_seg, device)
         _, _, w_latents_dst = get_latent(style_model, dst_seg, device)
@@ -152,7 +206,7 @@ def train_pairs_batch(batch, style_model, latent_model, device):
     # Identity loss: can be omitted, while the self-transform is included in
     # the training set
     w_i = latent_model(w_latents_src, 0 * delta_attributes)
-    loss_identity = (w_latents_src, w_i)
+    loss_identity = F.l1_loss(w_latents_src, w_i)
 
     # Neighborhood loss is omitted, similar constraint is enforced with target losss
     # loss_neighborhood = F.mse_loss(w_n_forward, w_latents_src)
@@ -169,4 +223,28 @@ def train_pairs_batch(batch, style_model, latent_model, device):
     return loss
 
 if __name__ == '__main__':
-    prepare_paired_dataset()
+    from argparse import Namespace
+    from torch.utils.data import DataLoader
+    from models.latent2latent import Latent2Latent
+    from training.coach import Coach
+    dataset = prepare_paired_dataset()
+    dataloader = DataLoader(dataset, batch_size=16)
+    batch = next(iter(dataloader))
+    # load style model
+    STYLE_MODEL_PATH = '/home/extra/micheal/pixel2style2pixel/experiments/ioct_seg2bscan2/checkpoints/best_model.pt'
+    style_ckpt = torch.load(STYLE_MODEL_PATH, map_location='cpu')
+    opts = style_ckpt['opts']
+    optss = Namespace(**opts)
+    optss.batch_size = 4
+    optss.stylegan_weights = STYLE_MODEL_PATH
+    optss.load_partial_weights = True
+    coach = Coach(optss)
+    style_model = coach.net
+    # Initialize latent2latent model
+    device = torch.device('cuda')
+    latent_model = Latent2Latent().to(device)
+    style_model = style_model.to(device)
+    style_model.latent_avg = style_model.latent_avg.to(device)
+    with torch.no_grad():
+        loss = train_pairs_batch(batch, style_model, latent_model, device)
+    print(loss)
