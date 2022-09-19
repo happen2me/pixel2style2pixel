@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from utils.regressor_utils import attribute_label_from_segmentation
 
+
 def modify_attribute(attribute, correlation_matrix, change_channel, change=None):
     """
     Modify the attribute by 1 dimension.
@@ -42,10 +43,11 @@ def get_latent(style_model, seg, device):
     """
     style_model = style_model.to(device)
     if len(seg.size()) < 4:
-        seg = seg.unsqueeze(0).float().to(device)
+        seg = seg.unsqueeze(0)
+    seg = seg.float().to(device)  
     with torch.no_grad():
         pred, latent, codes = style_model(seg, return_latents=True, return_codes=True)
-    return pred.detach().cpu(), latent.detach().cpu(), codes.detach().cpu()
+    return pred.detach(), latent.detach(), codes.detach()
 
 
 def train_imgs_batch(segs, style_model, regressor, latent_model, device, correlation_matrix, change_channel=1):
@@ -98,7 +100,7 @@ def train_imgs_batch(segs, style_model, regressor, latent_model, device, correla
     attribute_scores = regressor(generated_images)
     loss_attributes = F.mse_loss(attribute_scores * attributes_mask, modified_attributes * attributes_mask)
     
-    loss_all =  loss_cycle*0.5 + loss_attributes + loss_identity*0.5 + loss_neighborhood*0.1
+    loss_all =  loss_cycle*0.5 + loss_attributes*10 + loss_identity*0.5 + loss_neighborhood*0.1
     return loss_all
 
 

@@ -172,17 +172,14 @@ def prepare_paired_dataset(attributes_cache_dir='artifacts/cache/paired'):
     return train_dataset
 
 
-def train_pairs_batch(batch, style_model, latent_model, device):
+def train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr,
+                      style_model, latent_model, device):
     """
     Train the latent to latent models with paired data.
     """
-    src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
-    src_seg, src_bscan, src_attr = src_seg.to(device), src_bscan.to(device), src_attr.to(device)
-    dst_seg, dst_bscan, dst_attr = dst_seg.to(device), dst_bscan.to(device), dst_attr.to(device)
     with torch.no_grad():
         _, _, w_latents_src = get_latent(style_model, src_seg, device)
         _, _, w_latents_dst = get_latent(style_model, dst_seg, device)
-    w_latents_src, w_latents_dst = w_latents_src.to(device), w_latents_dst.to(device)
     # if instrument & shadow don't appear in both image, then make the
     # target as itself. In this case, the attr_diff has appearance channel
     # as 0, other channels can be non-zero, but the image & latents should
@@ -230,6 +227,7 @@ if __name__ == '__main__':
     dataset = prepare_paired_dataset()
     dataloader = DataLoader(dataset, batch_size=16)
     batch = next(iter(dataloader))
+    src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
     # load style model
     STYLE_MODEL_PATH = '/home/extra/micheal/pixel2style2pixel/experiments/ioct_seg2bscan2/checkpoints/best_model.pt'
     style_ckpt = torch.load(STYLE_MODEL_PATH, map_location='cpu')
@@ -245,6 +243,9 @@ if __name__ == '__main__':
     latent_model = Latent2Latent().to(device)
     style_model = style_model.to(device)
     style_model.latent_avg = style_model.latent_avg.to(device)
+    src_seg, src_bscan, src_attr = src_seg.to(device), src_bscan.to(device), src_attr.to(device)
+    dst_seg, dst_bscan, dst_attr = dst_seg.to(device), dst_bscan.to(device), dst_attr.to(device)
     with torch.no_grad():
-        loss = train_pairs_batch(batch, style_model, latent_model, device)
+        loss = train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr,
+                                 style_model, latent_model, device)
     print(loss)
