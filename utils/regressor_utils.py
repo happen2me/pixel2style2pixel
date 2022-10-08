@@ -42,7 +42,17 @@ def attribute_label_from_segmentation(seg, normalize=False):
         seg: (H, W)
         normalize: if True, normalize the label to [0, 1]
     Returns:
-        attribute: (10)
+        attribute:  (10)
+            (instrument_presence,
+            instrument_x_avg,
+            instrument_y_avg,
+            instrument_x_span,
+            instrument_y_span,
+            shadow_presence,
+            shadow_x_avg,
+            shadow_y_avg,
+            shadow_x_span,
+            shadow_y_span)
     """
     label = [0] * 10
     assert len(seg.shape) < 4, f"the segmentation should not be batched, got shape {seg.shape}"

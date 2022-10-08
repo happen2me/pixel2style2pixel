@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from utils.latent_utils import attribute_label_from_segmentation, get_latent
+from utils.latent_utils import attribute_label_from_segmentation, get_latent, modify_attribute
 from configs.transforms_config import ToOneHot, Conver2Uint8, MyResize
 from dataset.paired_dataset import PairedDataset
 
@@ -40,6 +40,7 @@ def group_images(image_dir):
     for k in groups.keys():
         groups[k] = sorted(groups[k])
     return groups
+
 
 def create_pairs(group, print_stats=False, sample_rate=0.1, positive_rate=0.8):
     """
@@ -93,17 +94,21 @@ generated {pairs.shape[0]} pairs")
     return attributes, pairs
 
 
-def prepare_paired_dataset(attributes_cache_dir='artifacts/cache/paired'):
+def prepare_paired_dataset(seg_folder = 'data/ioct/labels/train/',
+                           bscan_folder = 'data/ioct/bscans/train/',
+                           attributes_cache_dir='artifacts/cache/paired'):
     """
-    A helper function that creates training dataset for paired latent transform task
+    A helper function that creates training dataset for paired latent transform task.
+    Each sample of the dataset contains (src_seg, src_bscan, src_attr, dst_seg, dst_bscan,
+    dst_attr)
 
     Args:
         attributes_cache_dir: the directory to cache attributes and pairs
+    Returns:
+        train_dataset: training dataset
     """
-    seg_folder = 'data/ioct/labels/train/'
-    bscan_folder = 'data/ioct/bscans/train/'
     groups = group_images(seg_folder)
-
+    print(f"Found {len(groups)} groups, their respective image prefixes are: {sorted(list(groups.keys()))}")
     # Load all seg paths for comparison with the saved ones
     seg_paths = []
     for k in sorted(list(groups.keys())):
@@ -176,6 +181,19 @@ def train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr
                       style_model, latent_model, device):
     """
     Train the latent to latent models with paired data.
+
+    Args:
+        src_seg: source segmentation
+        src_bscan: source bscan
+        src_attr: source attributes
+        dst_seg: destination segmentation
+        dst_bscan: destination bscan
+        dst_attr: destination attributes
+        style_model: style model (frozen)
+        latent_model: the latent model to train
+        device: device to run on
+    Returns:
+        loss: loss value
     """
     with torch.no_grad():
         _, _, w_latents_src = get_latent(style_model, src_seg, device)
@@ -216,27 +234,91 @@ def train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr
     loss_reconstruct = F.mse_loss(generated_images_dst, dst_bscan) + \
                        F.mse_loss(generated_images_src, src_bscan)
 
-    loss = loss_dst + loss_cycle + loss_identity + loss_reconstruct
+    loss = loss_dst * 10 + loss_cycle + loss_identity + loss_reconstruct * 0.01
     return loss
 
-if __name__ == '__main__':
+
+def load_coach(model_path='/home/extra/micheal/pixel2style2pixel/experiments/ioct_seg2bscan2/checkpoints/best_model.pt',
+              batch_size=16, load_partial_weights=True):
+    """
+    Load Coach object from pretraining. This is used to simplify the
+    boilderplate code for loading the style model.
+
+    Args:
+        model_path: path to the trained checkpoint
+        batch_size: batch size for the dataloader (used for style model)
+        load_partial_weights: if True, only load the weights for the style model
+    Returns:
+        Coach object
+    """
     from argparse import Namespace
+    from training.coach import Coach
+    ckpt = torch.load(model_path, map_location='cpu')
+    opts = ckpt['opts']
+    optss = Namespace(**opts)
+    optss.batch_size = batch_size
+    optss.stylegan_weights = model_path
+    optss.load_partial_weights = load_partial_weights
+    return Coach(optss)
+
+
+class InferenceGenerator:
+    """
+    A inference time helper class that generates images based on modified attributes.
+    """
+    def __init__(self, style_model, latent_model, correlation_matrix, device):
+        self.style_model = style_model
+        self.latent_model = latent_model
+        self.device = device
+        self.correlation_matrix = correlation_matrix
+        
+    def generate_new(self, w_latents, attribute, change, change_channel):
+        modified_attribute, actual_change = modify_attribute(attribute, self.correlation_matrix, 
+                                                             change_channel=change_channel,
+                                                             change=change)
+        modified_attribute = torch.Tensor(modified_attribute).unsqueeze(0)
+        attribute = torch.Tensor(attribute).unsqueeze(0)
+        delta_attributes = modified_attribute - attribute
+        delta_attributes = delta_attributes.to(self.device)
+        w_latents = w_latents.to(self.device)
+        with torch.no_grad():
+            w_n =  self.latent_model(w_latents, delta_attributes)
+            w_n = 0.7*w_latents + 0.3*w_n
+            generated_images = self.style_model(w_n, input_code=True).detach().cpu().numpy()
+        generated_image = generated_images[0][0]
+        return generated_image, actual_change
+
+    def generate_new_imgs(self, seg, changes, change_channel=1):
+        segs = seg.unsqueeze(0).float().cuda()
+        with torch.no_grad():
+            _, w_latents, w_codes = get_latent(self.style_model, segs, self.device)
+        attribute = attribute_label_from_segmentation(seg, normalize=True)
+        results = []
+        for change in changes:
+            img, actual_change = self.generate_new(w_latents, attribute, change, change_channel)
+            results.append((img, actual_change))
+        return results
+
+    def generate_original(self, seg):
+        segs = seg.unsqueeze(0).float().cuda()
+        with torch.no_grad():
+            _, w_latents, w_codes = get_latent(self.style_model, segs, self.device)
+        w_latents = w_latents.to(self.device)
+        reconstructed = self.style_model(w_latents, input_code=True).detach().cpu().numpy()
+        return reconstructed[0][0]
+
+
+
+if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from models.latent2latent import Latent2Latent
-    from training.coach import Coach
     dataset = prepare_paired_dataset()
     dataloader = DataLoader(dataset, batch_size=16)
     batch = next(iter(dataloader))
     src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
     # load style model
     STYLE_MODEL_PATH = '/home/extra/micheal/pixel2style2pixel/experiments/ioct_seg2bscan2/checkpoints/best_model.pt'
-    style_ckpt = torch.load(STYLE_MODEL_PATH, map_location='cpu')
-    opts = style_ckpt['opts']
-    optss = Namespace(**opts)
-    optss.batch_size = 4
-    optss.stylegan_weights = STYLE_MODEL_PATH
-    optss.load_partial_weights = True
-    coach = Coach(optss)
+    coach = load_coach(STYLE_MODEL_PATH, batch_size=4)
     style_model = coach.net
     # Initialize latent2latent model
     device = torch.device('cuda')
