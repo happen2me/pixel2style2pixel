@@ -1,5 +1,6 @@
 from abc import abstractmethod
-import torchvision.transforms as transforms
+from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 from dataset import augmentations
 import torch
 
@@ -106,9 +107,9 @@ class SegToImageTransforms(TransformsConfig):
 				transforms.ToTensor(),
 				transforms.Normalize([0.5] * self.opts.output_nc, [0.5] * self.opts.output_nc)]),
 			'transform_source': transforms.Compose([
+				transforms.Resize((256, 256), interpolation=InterpolationMode.NEAREST),
 				transforms.ToTensor(),
-				Conver2Uint8(),
-				MyResize((256, 256)),
+				Convert2Uint8(),
 				ToOneHot(self.opts.label_nc)
 				]),
 			'transform_test': transforms.Compose([
@@ -116,9 +117,9 @@ class SegToImageTransforms(TransformsConfig):
 				transforms.ToTensor(),
 				transforms.Normalize([0.5] * self.opts.output_nc, [0.5] * self.opts.output_nc)]),
 			'transform_inference': transforms.Compose([
+				transforms.Resize((256, 256), interpolation=InterpolationMode.NEAREST),
 				transforms.ToTensor(),
-				Conver2Uint8(),
-				MyResize((256, 256)),
+				Convert2Uint8(),
 				ToOneHot(self.opts.label_nc)
 				])
 		}
@@ -160,13 +161,12 @@ class SuperResTransforms(TransformsConfig):
 		return transforms_dict
 
 
-class Conver2Uint8(torch.nn.Module):
+class Convert2Uint8(torch.nn.Module):
     '''
     Resize input when the target dim is not divisible by the input dim
     '''
     def __init__(self):
         super().__init__()
-
     def forward(self, img):
         """
         Args:
@@ -177,7 +177,7 @@ class Conver2Uint8(torch.nn.Module):
         """
         img = torch.round(torch.mul(img, 255))
         return img
-    
+
 class MyResize(torch.nn.Module):
     '''
     Resize input when the target dim is not divisible by the input dim
@@ -211,7 +211,6 @@ class ToOneHot(torch.nn.Module):
 	def __init__(self, num_classes):
 		super().__init__()
 		self.num_classes = num_classes
-	
 	def forward(self, img):
 		"""
 		Args:
