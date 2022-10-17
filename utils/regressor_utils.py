@@ -57,7 +57,7 @@ def attribute_label_from_segmentation(seg, normalize=False):
     label = [0] * 10
     assert len(seg.shape) < 4, f"the segmentation should not be batched, got shape {seg.shape}"
     if len(seg.shape) >= 3:
-        assert seg.shape[0] == 5, f"illegal segmentation shape: {seg.shape}"
+        # assert seg.shape[0] == 5, f"illegal segmentation shape: {seg.shape}"
         seg = seg.argmax(dim=0)
     x2, y2, h2, w2, n2 = get_coor_avg(seg, 2) #instrument
     x4, y4, h4, w4, n4 = get_coor_avg(seg, 4) #shadow
