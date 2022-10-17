@@ -4,28 +4,32 @@ from pathlib import Path
 from glob import glob
 from collections import defaultdict
 import pickle
+from argparse import Namespace
 from PIL import Image
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+import torcheck
 from utils.latent_utils import attribute_label_from_segmentation, get_latent, modify_attribute
-from configs.transforms_config import ToOneHot, Conver2Uint8, MyResize
+from configs.transforms_config import ToOneHot, Convert2Uint8, MyResize
+from configs.data_configs import DATASETS
 from dataset.paired_dataset import PairedDataset
 
 
-seg_transform = transforms.Compose([
-    transforms.ToTensor(),
-    Conver2Uint8(),
-    MyResize((256, 256)),
-    ToOneHot(5)
-    ])
 
-bscan_transform = transforms.Compose([
-    transforms.Resize((256, 256)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.5] * 1, [0.5] * 1)
-    ])
+# seg_transform = transforms.Compose([
+#     transforms.ToTensor(),
+#     Convert2Uint8(),
+#     MyResize((256, 256)),
+#     ToOneHot(5)
+#     ])
+
+# bscan_transform = transforms.Compose([
+#     transforms.Resize((256, 256)),
+#     transforms.ToTensor(),
+#     transforms.Normalize([0.5] * 1, [0.5] * 1)
+#     ])
 
 def group_images(image_dir):
     """
@@ -42,10 +46,10 @@ def group_images(image_dir):
     return groups
 
 
-def create_pairs(group, print_stats=False, sample_rate=0.1, positive_rate=0.8):
+def create_pairs(group, seg_transform, print_stats=False):
     """
     Create training samples within a group. It will n pairs, where
-    n = generate sample_rate * n_instrument_images * n_images
+    n = n_instrument_or_shadow_appeared ^ 2 + n_images
 
     Args:
         group: a list of image paths
@@ -60,33 +64,29 @@ def create_pairs(group, print_stats=False, sample_rate=0.1, positive_rate=0.8):
         seg = seg_transform(seg)
         attributes.append(attribute_label_from_segmentation(seg, normalize=True))
     # 2. Sample image pairs according to the attributes
-    attributes = np.array(attributes) # [n_samples, n_attributes]
+    attributes = np.asarray(attributes) # [n_samples, n_attributes]
     # for each attribute with instrument or 
     instrument_appeared = np.isclose(attributes[:, 0], 1)
     shadow_appeared = np.isclose(attributes[:, 5], 1)
-    # For each picture with instrument, we sample 4/5 from others with instrument and sample 1/5 from
-    # those without instrument
+    # For each picture with instrument, we sample 4/5 from others with instrument and
+    # sample 1/5 from those without instrument
     instrument_or_shadow_appeared = np.logical_or(instrument_appeared, shadow_appeared)
     appear_list = np.where(instrument_or_shadow_appeared == True)[0]
     not_appear_list = np.where(instrument_or_shadow_appeared != True)[0]
-    n_images = len(group)
-    n_samples_per_image = int(sample_rate * n_images)
-    n_positive = int(positive_rate * n_samples_per_image)
-    n_negative = n_samples_per_image - n_positive
     pairs = []
-    for idx in appear_list:
-        positive_samples = np.random.choice(appear_list, n_positive, replace=False)
-        negative_samples = np.random.choice(not_appear_list, n_negative, replace=False)
-        to_pair = np.concatenate((positive_samples, negative_samples))
-        idx_dup = np.full_like(to_pair, idx)
-        paired = np.stack((idx_dup, to_pair)).T
-        pairs.append(paired)
-    # we also create a self transform
-    to_pair = list(range(n_images))
-    paired = np.stack((to_pair, to_pair)).T
-    pairs.append(paired) 
+    positive_samples = [] # instruments appear in both images
+    # for each image with instruments, pair it with every other image with instruments
+    for idx_src in appear_list:
+        for idx_dst in appear_list:
+            positive_samples.append((idx_src, idx_dst))
+    
+    negative_samples = [] # self-pairing
+    for idx_src in np.concatenate((not_appear_list, appear_list)):
+        negative_samples.append((idx_src, idx_src))
+    
+    pairs = positive_samples + negative_samples
     # 3. Return 2 lists: attributes, index pairs
-    pairs = np.concatenate(pairs, axis=0) # pairs is of shape [n_pairs, 2]
+    pairs = np.asarray(pairs) # pairs is of shape [n_pairs, 2]
     if print_stats:
         print(f"Instrument appeared: {np.sum(instrument_appeared)}, shadow appeared: \
 {np.sum(shadow_appeared).item()}, total images: {attributes.shape[0]}, \
@@ -96,7 +96,11 @@ generated {pairs.shape[0]} pairs")
 
 def prepare_paired_dataset(seg_folder = 'data/ioct/labels/train/',
                            bscan_folder = 'data/ioct/bscans/train/',
-                           attributes_cache_dir='artifacts/cache/paired'):
+                           attributes_cache_dir='artifacts/cache/paired',
+                           dataset_name='ioct_amd_seg_to_bscan',
+                           label_nc=6,
+                           output_nc=1,
+                           print_stats=False):
     """
     A helper function that creates training dataset for paired latent transform task.
     Each sample of the dataset contains (src_seg, src_bscan, src_attr, dst_seg, dst_bscan,
@@ -104,11 +108,20 @@ def prepare_paired_dataset(seg_folder = 'data/ioct/labels/train/',
 
     Args:
         attributes_cache_dir: the directory to cache attributes and pairs
+        dataset_name: will be used to locate transform functions
+        label_nc: number of label channels of the segmentation
+        output_nc: number of output channels of the bscan
     Returns:
         train_dataset: training dataset
     """
+    transform_config = Namespace(label_nc=label_nc, output_nc=output_nc)
+    transform_dict = DATASETS[dataset_name]['transforms'](transform_config).get_transforms()
+    seg_transform = transform_dict['transform_source']
+    bscan_transform = transform_dict['transform_gt_train']
+
     groups = group_images(seg_folder)
-    print(f"Found {len(groups)} groups, their respective image prefixes are: {sorted(list(groups.keys()))}")
+    if print_stats:
+        print(f"Found {len(groups)} groups, their respective image prefixes are: {sorted(list(groups.keys()))}")
     # Load all seg paths for comparison with the saved ones
     seg_paths = []
     for k in sorted(list(groups.keys())):
@@ -140,10 +153,11 @@ def prepare_paired_dataset(seg_folder = 'data/ioct/labels/train/',
         seg_paths = [] # we need this again to count accumulated segmentations
         for k in sorted(list(groups.keys())):
             group = groups[k]
-            attributes, pairs = create_pairs(group, print_stats=True)
+            attributes, pairs = create_pairs(group, seg_transform, print_stats=print_stats)
             # Set an offset to the image index
-            seg_paths += group
             pairs += len(seg_paths)
+            # Update seg_paths AFTER setting the offset
+            seg_paths += group
             all_attributes.append(attributes)
             all_pairs.append(pairs)
         all_attributes = np.concatenate(all_attributes, axis=0)
@@ -170,11 +184,11 @@ def prepare_paired_dataset(seg_folder = 'data/ioct/labels/train/',
         raise ValueError("Mismatch")
     # Create a dataset from the attributes and pairs
     bscan_paths = sorted(glob(bscan_folder + '*'))
-    train_dataset = PairedDataset(seg_paths=seg_paths, bscan_paths=bscan_paths, 
+    paired_dataset = PairedDataset(seg_paths=seg_paths, bscan_paths=bscan_paths,
                                   attributes=all_attributes, seg_transform=seg_transform,
                                   bscan_transform=bscan_transform, pair_indices=all_pairs)
-    print(f"len train dataset: {len(train_dataset)}")
-    return train_dataset
+    print(f"len dataset: {len(paired_dataset)}")
+    return paired_dataset
 
 
 def train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr,
@@ -198,43 +212,42 @@ def train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr
     with torch.no_grad():
         _, _, w_latents_src = get_latent(style_model, src_seg, device)
         _, _, w_latents_dst = get_latent(style_model, dst_seg, device)
-    # if instrument & shadow don't appear in both image, then make the
-    # target as itself. In this case, the attr_diff has appearance channel
-    # as 0, other channels can be non-zero, but the image & latents should
-    # remain the same
+    
+    # the appearance of the instruments and shadows (are the same as dst)
     delta_attributes = dst_attr - src_attr
+    # delta_attributes[:, 0] = dst_attr[:, 0]
+    # delta_attributes[:, 5] = dst_attr[:, 5]
+    delta_attributes_backward = -delta_attributes
+    # delta_attributes_backward[:, 0] = src_attr[:, 0]
+    # delta_attributes_backward[:, 5] = src_attr[:, 5]
 
-    w_n_forward = latent_model(w_latents_src, delta_attributes)
-    w_n_backward = latent_model(w_latents_dst, -delta_attributes)
+    w_n = latent_model(w_latents_src, delta_attributes)
 
     # Target losss: converted latent resemble target latent
-    loss_dst = F.l1_loss(w_n_forward, w_latents_dst) + \
-               F.l1_loss(w_n_backward, w_latents_src)
+    loss_dst = F.mse_loss(w_n, w_latents_dst)
 
     # Cycle loss: when convert the latent backword with the negative
     # delta attributes, the latent should be the same as the original
-    w_n_c_forward = latent_model(w_n_forward, -delta_attributes)
-    w_n_c_backward = latent_model(w_n_backward, delta_attributes)
-    loss_cycle = F.l1_loss(w_n_c_forward, w_latents_src) + \
-                 F.l1_loss(w_n_c_backward, w_latents_dst)
+    w_n_c = latent_model(w_n, delta_attributes_backward)
+    loss_cycle = F.mse_loss(w_n_c, w_latents_src)
 
     # Identity loss: can be omitted, while the self-transform is included in
     # the training set
     w_i = latent_model(w_latents_src, 0 * delta_attributes)
-    loss_identity = F.l1_loss(w_latents_src, w_i)
+    loss_identity = F.mse_loss(w_i, w_latents_src)
 
     # Neighborhood loss is omitted, similar constraint is enforced with target losss
     # loss_neighborhood = F.mse_loss(w_n_forward, w_latents_src)
 
     # Reconstruction loss: use the generted dst latent to reconstruct the dst bscan,
     # the bscan should resemble the target bscan
-    generated_images_dst = style_model(w_n_forward, input_code=True)
-    generated_images_src = style_model(w_n_backward, input_code=True)
+    generated_images_dst = style_model(w_n, input_code=True)
 
-    loss_reconstruct = F.mse_loss(generated_images_dst, dst_bscan) + \
-                       F.mse_loss(generated_images_src, src_bscan)
+    # Reduction is default to meanx, which means it doesn't differ with previous
+    # losses in scale
+    loss_reconstruct = F.mse_loss(generated_images_dst, dst_bscan)
 
-    loss = loss_dst * 10 + loss_cycle + loss_identity + loss_reconstruct * 0.01
+    loss = loss_dst * 5 + loss_cycle + loss_identity + loss_reconstruct
     return loss
 
 
@@ -251,7 +264,6 @@ def load_coach(model_path='/home/extra/micheal/pixel2style2pixel/experiments/ioc
     Returns:
         Coach object
     """
-    from argparse import Namespace
     from training.coach import Coach
     ckpt = torch.load(model_path, map_location='cpu')
     opts = ckpt['opts']
@@ -312,22 +324,36 @@ class InferenceGenerator:
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from models.latent2latent import Latent2Latent
-    dataset = prepare_paired_dataset()
+    # dataset = prepare_paired_dataset()
+    dataset = prepare_paired_dataset(seg_folder = 'data/overfit/labels/train/',
+        bscan_folder = 'data/overfit/bscans/train/',
+        attributes_cache_dir='artifacts/cache/paired_overfit',
+        print_stats=True)
     dataloader = DataLoader(dataset, batch_size=16)
     batch = next(iter(dataloader))
     src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr = batch
     # load style model
-    STYLE_MODEL_PATH = '/home/extra/micheal/pixel2style2pixel/experiments/ioct_seg2bscan2/checkpoints/best_model.pt'
+    STYLE_MODEL_PATH = 'experiments/ioct_seg2bscan5/checkpoints/best_model.pt'
     coach = load_coach(STYLE_MODEL_PATH, batch_size=4)
     style_model = coach.net
     # Initialize latent2latent model
     device = torch.device('cuda')
     latent_model = Latent2Latent().to(device)
     style_model = style_model.to(device)
+    for p in style_model.parameters():
+        p.requires_grad = False
+    optimizer = torch.optim.Adam(latent_model.parameters(), lr=1e-2)
+    torcheck.register(optimizer)
+    torcheck.add_module_changing_check(latent_model, module_name='latent2latent')
+    # torcheck.add_module_unchanging_check(style_model, module_name='stylegan')
+    torcheck.verbose_on()
     style_model.latent_avg = style_model.latent_avg.to(device)
     src_seg, src_bscan, src_attr = src_seg.to(device), src_bscan.to(device), src_attr.to(device)
     dst_seg, dst_bscan, dst_attr = dst_seg.to(device), dst_bscan.to(device), dst_attr.to(device)
-    with torch.no_grad():
+
+    for _ in range(3):
         loss = train_pairs_batch(src_seg, src_bscan, src_attr, dst_seg, dst_bscan, dst_attr,
-                                 style_model, latent_model, device)
-    print(loss)
+                                    style_model, latent_model, device)
+        print('loss:', loss)
+        loss.backward()
+        optimizer.step()
