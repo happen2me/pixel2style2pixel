@@ -51,5 +51,12 @@ DATASETS = {
 		'train_target_root': dataset_paths['ioct_overfit'],
 		'test_source_root': dataset_paths['ioct_overfit_segmentation'],
 		'test_target_root': dataset_paths['ioct_overfit'],
+	},
+	'ioct_amd_seg_to_bscan': {
+		'transforms': transforms_config.SegToImageTransforms,
+		'train_source_root': dataset_paths['ioct_amd_train_segmentation'],
+		'train_target_root': dataset_paths['ioct_amd_train'],
+		'test_source_root': dataset_paths['ioct_amd_test_segmentation'],
+		'test_target_root': dataset_paths['ioct_amd_test'],
 	}
 }

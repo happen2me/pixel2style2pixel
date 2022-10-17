@@ -11,7 +11,11 @@ dataset_paths = {
 	'ioct_test_segmentation': 'data/ioct/labels/test',
 	'ioct_test': 'data/ioct/bscans/test',
 	'ioct_overfit_segmentation': 'data/overfit/labels/train',
-	'ioct_overfit': 'data/overfit/bscans/train'
+	'ioct_overfit': 'data/overfit/bscans/train',
+	'ioct_amd_train_segmentation': 'data/ioct/labels/train,data/amd/labels/train',
+	'ioct_amd_train': 'data/ioct/bscans/train,data/amd/bscans/train',
+	'ioct_amd_test_segmentation': 'data/ioct/labels/test,data/amd/labels/test',
+	'ioct_amd_test': 'data/ioct/bscans/test,data/amd/bscans/test',
 }
 
 model_paths = {
